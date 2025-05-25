@@ -63,17 +63,14 @@ VOICE_NAMES   = ("T", "A", "S")  # Tenor, Alto, Soprano
 SPECIES_LABEL = {1: "1ª", 2: "2ª", 3: "3ª", 4: "4ª"}
 MAX_LEAP      = 9  # semitonos → 6ª mayor
 
-# Consonancias renacentistas (mod 12). 
-# (Ojo: la 4ª justa (5) se incluye, aunque a veces se trata como disonante).
-CONSONANT = {0, 3, 4, 5, 7, 8, 9}  # 0=octava/unísono, 3=3ªm, 4=3ªM, 5=4ª, 7=5ª, 8=6ªm, 9=6ªM
+# Consonancias renacentistas (mod 12)
+CONSONANT = {0, 3, 4, 5, 7, 8, 9}
 
 def is_consonant(st_int: int) -> bool:
-    """ True si el intervalo (en semitonos) es consonante. """
     return abs(st_int) % 12 in CONSONANT
 
 @dataclass
 class VoiceDef:
-    """Rango y especie de una voz (1ª a 4ª)."""
     name: str
     species: int
     midi_lo: int
@@ -94,23 +91,15 @@ def generate_cantus(
     rng: Tuple[int, int],
     seed: int | None = None,
 ) -> List[int]:
-    """
-    Cantus firmus sencillo:
-      - Comienza y termina en la tónica.
-      - Salto máximo a 6ª (9 semitonos).
-      - Evita 2 saltos consecutivos en la misma dirección.
-      - Único pico (máximo) en la línea.
-    """
     if seed is not None and seed != 0:
         random.seed(seed)
 
-    scale = k.getPitches()  # diatónico según Key/Modo
+    scale = k.getPitches()
     tonic_midi = pitch.Pitch(k.tonic).midi
     line: List[int] = [tonic_midi]
 
     while len(line) < length - 1:
         cur = line[-1]
-        # candidatos en la escala, dentro de rng y salto <= 9 semitonos
         cands = [
             p.midi
             for p in scale
@@ -120,7 +109,6 @@ def generate_cantus(
 
         chosen = None
         for c in cands:
-            # evita dos saltos consecutivos en la misma dirección
             if len(line) >= 2:
                 if (c - line[-1]) * (line[-1] - line[-2]) > 0:
                     continue
@@ -128,14 +116,11 @@ def generate_cantus(
             break
 
         if chosen is None:
-            # no encontramos candidato => reintentamos
             return generate_cantus(length, k, rng, seed)
         line.append(chosen)
 
-    # cierra en la tónica
     line.append(tonic_midi)
 
-    # exige pico único
     peak = max(line)
     if line.count(peak) > 1:
         return generate_cantus(length, k, rng, seed)
@@ -143,50 +128,32 @@ def generate_cantus(
     return line
 
 ##############################################################################
-# 3. UTILIDADES DE INTERVALOS Y CURSOR DE VOZ
+# 3. INTERVALOS Y CURSOR
 ##############################################################################
 def intervals_semitones(n1: int, n2: int) -> int:
-    """
-    Devuelve la distancia en semitonos (mod 12)
-    entre dos valores de MIDI (enteros).
-    """
     return (n2 - n1) % 12
 
 def is_perfect(st: int) -> bool:
-    """Devuelve True si es unísono/octava (0 mod12) o quinta justa (7 mod12)."""
     return st in (0, 7)
 
 def parallel_or_direct(old_a: int, old_b: int, new_a: int, new_b: int) -> bool:
-    """
-    - True si hay paralelos perfectos consecutivos (5ª u 8ª),
-    - O 'approach directo' (movimiento conjunto a 5ª/8ª)
-      con salto > 2 en la voz superior.
-    """
     old_int = intervals_semitones(old_a, old_b)
     new_int = intervals_semitones(new_a, new_b)
-
     dir_a = new_a - old_a
     dir_b = new_b - old_b
 
-    # 1) Paralelos perfectos en pasos consecutivos
     if is_perfect(old_int) and (old_int == new_int):
-        # Ambas voces se mueven misma dirección
         if dir_a * dir_b > 0:
             return True
 
-    # 2) Approach directo a intervalo perfecto
     if not is_perfect(old_int) and is_perfect(new_int):
-        if dir_a * dir_b > 0:  # mismo sentido
-            # Determinar voz superior
+        if dir_a * dir_b > 0:
             if old_b > old_a:
-                # B es la voz superior
                 if abs(new_b - old_b) > 2:
                     return True
             else:
-                # A es la voz superior
                 if abs(new_a - old_a) > 2:
                     return True
-
     return False
 
 @dataclass
@@ -200,23 +167,15 @@ class VoiceCursor:
         return self.notes[-offset]
 
     def melodic_ok(self, midi_val: int) -> bool:
-        """
-        Chequea:
-         1) Rango
-         2) Salto max
-         3) Compensación de salto grande anterior
-        """
         if not (self.vdef.midi_lo <= midi_val <= self.vdef.midi_hi):
             return False
         prev = self.last_note()
         if prev is not None and abs(midi_val - prev) > MAX_LEAP:
             return False
 
-        # Compensación de salto >= 7
         prev2 = self.last_note(2)
         if prev is not None and prev2 is not None:
             if abs(prev - prev2) >= 7:
-                # moverse en dirección contraria y <= 2 semitonos
                 if (midi_val - prev) * (prev - prev2) >= 0:
                     return False
                 if abs(midi_val - prev) > 2:
@@ -231,9 +190,6 @@ def check_1st_species(
     note_this: int, note_cf: int, sub_beat: int, total_subs: int,
     vcur: VoiceCursor, note_prev: int | None, note_cf_prev: int | None
 ) -> bool:
-    """
-    1ª especie: 1 nota por compás => consonancia total.
-    """
     st_int = note_this - note_cf
     return is_consonant(st_int)
 
@@ -241,17 +197,10 @@ def check_2nd_species(
     note_this: int, note_cf: int, sub_beat: int, total_subs: int,
     vcur: VoiceCursor, note_prev: int | None, note_cf_prev: int | None
 ) -> bool:
-    """
-    2ª especie: 2 notas por compás => (fuerte, débil)
-    - Fuerte => consonancia
-    - Débil => disonancia de paso permitida (<= 2 semitonos)
-    """
     st_int = note_this - note_cf
     if sub_beat == 0:
-        # tiempo fuerte => consonancia
         return is_consonant(st_int)
     else:
-        # tiempo débil => permite disonancia de paso
         if is_consonant(st_int):
             return True
         else:
@@ -265,11 +214,6 @@ def check_3rd_species(
     note_this: int, note_cf: int, sub_beat: int, total_subs: int,
     vcur: VoiceCursor, note_prev: int | None, note_cf_prev: int | None
 ) -> bool:
-    """
-    3ª especie: 4 notas por compás => sub_beat en [0,1,2,3].
-    - 0 y 2 => consonancia
-    - 1 y 3 => paso, puede ser disonancia
-    """
     st_int = note_this - note_cf
     if sub_beat in (0, 2):
         return is_consonant(st_int)
@@ -287,11 +231,6 @@ def check_4th_species(
     note_this: int, note_cf: int, sub_beat: int, total_subs: int,
     vcur: VoiceCursor, note_prev: int | None, note_cf_prev: int | None
 ) -> bool:
-    """
-    4ª especie: 2 notas por compás (síncopas).
-    - sub_beat=0 => se permite disonancia (retardo)
-    - sub_beat=1 => consonancia
-    """
     st_int = note_this - note_cf
     if sub_beat == 0:
         return True
@@ -330,55 +269,39 @@ def generate_counterpoint_pro(
     max_tries: int = 5,
     progress_cb=lambda x: None,
 ) -> Dict[str, List[int]]:
-    """
-    Genera contrapunto para 3 voces, cada una con 1ª...4ª especie,
-    usando un 'LCM grid' para alinear subtiempos.
-    """
-    # Subdivisión base por especie
     sp_subdiv_map = {1:1, 2:2, 3:4, 4:2}
-
-    # Hallar MCM para compatibilizar subdivisiones
     subs_list = [sp_subdiv_map[v.species] for v in voices.values()]
     lcm_val = 1
     for s in subs_list:
         lcm_val = lcm(lcm_val, s)
 
-    # Construir grid => (compás, sub)
     grid = []
     for b in range(len(cf)):
         for sub in range(lcm_val):
             grid.append((b, sub))
 
-    # Cursores
     cursors = {vn: VoiceCursor(vdef, []) for vn, vdef in voices.items()}
-    order = ["T", "A", "S"]  # Orden Tenor, Alto, Soprano
+    order = ["T", "A", "S"]
 
     def dfs(idx: int) -> bool:
         if idx == len(grid):
-            # Terminamos
             return True
 
         beat, sub = grid[idx]
         cf_pitch = cf[beat]
 
-        # Para cada voz que toca en este subtiempo
         for vn in order:
             vcur = cursors[vn]
             subdiv_required = sp_subdiv_map[vcur.vdef.species]
             block_size = lcm_val // subdiv_required
 
-            # Solo le toca poner nota en subtiempos múltiplos de block_size
             if sub % block_size != 0:
                 continue
 
-            # Índice local de la nota en esta voz
             note_index = beat * subdiv_required + (sub // block_size)
-
             if len(vcur.notes) > note_index:
-                # Ya está asignada la nota
                 continue
 
-            # Generar lista de candidatos en su rango, ordenados por cercanía
             base_range = range(vcur.vdef.midi_lo, vcur.vdef.midi_hi+1)
             prev_n = vcur.last_note()
             if prev_n is not None:
@@ -388,39 +311,30 @@ def generate_counterpoint_pro(
 
             assigned_ok = False
             for cand in base_list:
-                # Reglas melódicas
                 if not vcur.melodic_ok(cand):
                     continue
 
-                # sub_beat_local => 0..(subdiv_required-1)
                 sub_beat_local = note_index % subdiv_required
-
-                n_prev = vcur.last_note()
                 note_cf_prev = cf[beat - 1] if beat > 0 else None
+                n_prev = vcur.last_note()
 
-                # Reglas de especie
                 if not validate_species(cand, cf_pitch, sub_beat_local,
                                        subdiv_required, vcur, n_prev, note_cf_prev):
                     continue
 
-                # Chequear cruces y paralelos con otras voces
                 for oname in order:
                     if oname == vn:
                         continue
                     ocur = cursors[oname]
-
-                    # Calcular índice en la otra voz
                     sp2 = sp_subdiv_map[ocur.vdef.species]
                     blk2 = lcm_val // sp2
                     idx2 = beat * sp2 + (sub // blk2)
 
-                    # 1) Aún no hay nota en esa posición => no podemos chequear
                     if idx2 >= len(ocur.notes):
                         continue
 
                     other_note = ocur.notes[idx2]
 
-                    # Cruce de voces en la misma subdivisión
                     if vn == "T" and oname == "A" and cand > other_note:
                         break
                     if vn == "T" and oname == "S" and cand > other_note:
@@ -434,14 +348,12 @@ def generate_counterpoint_pro(
                     if vn == "S" and oname == "A" and cand < other_note:
                         break
 
-                    # Paralelos: necesitamos idx2>0 (para acceder idx2-1)
                     if idx2 > 0 and len(vcur.notes) > (idx2 - 1) and len(ocur.notes) > (idx2 - 1):
                         old_a = vcur.notes[idx2 - 1]
                         old_b = ocur.notes[idx2 - 1]
                         if parallel_or_direct(old_a, old_b, cand, other_note):
                             break
                 else:
-                    # No se rompió => cand es válido
                     vcur.notes.append(cand)
                     assigned_ok = True
                     break
@@ -449,13 +361,11 @@ def generate_counterpoint_pro(
             if not assigned_ok:
                 return False
 
-        return dfs(idx + 1)
+        return dfs(idx+1)
 
-    # Intentar varias veces
-    for attempt in range(1, max_tries + 1):
-        progress_cb(int((attempt - 1) / max_tries * 100))
+    for attempt in range(1, max_tries+1):
+        progress_cb(int((attempt-1)/max_tries*100))
         log.info(f"🔄 Intento {attempt}/{max_tries}")
-        # Limpiar notas antes de cada intento
         for v in cursors.values():
             v.notes.clear()
 
@@ -466,59 +376,46 @@ def generate_counterpoint_pro(
     raise RuntimeError("No se encontró solución con las reglas avanzadas.")
 
 ##############################################################################
-# 6. CONSTRUCCIÓN DE LA PARTITURA Y EXPORTACIÓN
+# 6. PARTITURA Y EXPORTACIÓN
 ##############################################################################
 def score_from_state(
     state: State,
     k: key.Key,
     voice_defs: Dict[str, VoiceDef]
 ) -> stream.Score:
-    """
-    Crea un objeto music21.stream.Score con CF y voces.
-    Asume compás 4/4 y duraciones según:
-     - 1ª especie => redondas (4)
-     - 2ª => blancas (2)
-     - 3ª => negras (1)
-     - 4ª => blancas (2)
-    """
     s = stream.Score()
     s.insert(0, k)
     s.insert(0, meter.TimeSignature("4/4"))
 
-    # Cantus Firmus
     cf_part = stream.Part(id="CF")
     cf_part.partName = "Cantus Firmus"
     for midi_val in state.cf:
-        cf_note = note.Note(midi_val, type="whole")
-        cf_part.append(cf_note)
+        cf_part.append(note.Note(midi_val, type="whole"))
     s.insert(0, cf_part)
 
-    # Mapeo de duraciones
     dur_map = {1: 4.0, 2: 2.0, 3: 1.0, 4: 2.0}
     for vn in VOICE_NAMES:
         vdef = voice_defs[vn]
         part = stream.Part(id=vn)
-        part.partName = f"{vn} ({SPECIES_LABEL.get(vdef.species, '')} especie)"
+        part.partName = f"{vn} ({SPECIES_LABEL.get(vdef.species,'')} especie)"
         for midi_val in state.voices[vn]:
             n = note.Note(midi_val)
             n.quarterLength = dur_map.get(vdef.species, 4.0)
             part.append(n)
         s.insert(0, part)
-
     return s
 
 def add_metronome(score: stream.Score, beats: int, velocity: int = 110) -> None:
-    """
-    Agrega un click (cowbell) a cada pulso (4 pulsos x compás).
-    """
+    """ Usar note.Note en lugar de note.Unpitched para evitar errores en MIDI """
     click = stream.Part(id="Click")
     click.insert(0, instrument.Woodblock())
 
     for _ in range(beats * 4):
-        tick = note.Unpitched()
-        tick.pitch.midi = 56  # Cowbell
+        # Reemplazamos Unpitched por Note
+        tick = note.Note(56)  # Cowbell GM
         tick.volume.velocity = velocity
         tick.quarterLength = 1.0
+        # tick.channel = 9    # si deseas usar canal de percusión
         click.append(tick)
 
     score.insert(0, click)
@@ -531,7 +428,6 @@ def export_files(
     midf = tmpdir / "contrapunto.mid"
     xmlf = tmpdir / "contrapunto.musicxml"
 
-    # Exportar a MIDI y MusicXML
     score.write("midi", fp=str(midf))
     score.write("musicxml", fp=str(xmlf))
 
@@ -618,8 +514,8 @@ if gen_btn:
         state = State(cf_list, voices_gen, lcm_grid=1)
         score = score_from_state(state, key_sel, default_voices)
 
-        # 4) Metrónomo (opcional)
-        beats_total = cf_len  # 1 compás por nota CF
+        # 4) Añadir metrónomo si se desea
+        beats_total = cf_len
         if audio_mode == "MIDI→WAV (FluidSynth)":
             add_metronome(score, beats_total)
 
